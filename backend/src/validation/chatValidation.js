@@ -6,7 +6,7 @@ const chatQuerySchema = z.object({
   latitude: z.coerce.number().min(-90).max(90).optional(),
   longitude: z.coerce.number().min(-180).max(180).optional(),
   language: z.string().optional().default('en'),
-  conversationId: z.string().optional(),
+  conversationId: z.string().nullable().optional(),
   conversationHistory: z.array(z.any()).optional()
 }).refine(data => data.message || data.prompt, {
   message: 'Message or prompt cannot be empty'

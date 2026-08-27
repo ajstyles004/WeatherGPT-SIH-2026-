@@ -139,13 +139,13 @@ export const alertService = {
  * Chat & Conversational AI Service
  */
 export const chatService = {
-  sendMessage: async ({ message, latitude, longitude, language = 'en', conversationId = null }) => {
+  sendMessage: async ({ message, latitude, longitude, language = 'en', conversationId }) => {
     const response = await apiClient.post('/chat', {
       message,
       latitude,
       longitude,
       language,
-      conversationId
+      ...(conversationId ? { conversationId } : {})
     });
     return response.data.data;
   },
