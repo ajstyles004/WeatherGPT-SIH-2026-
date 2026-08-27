@@ -201,9 +201,13 @@ const ChatPage = () => {
 
       if (result.conversationId && !activeConversationId) {
         setActiveConversationId(result.conversationId);
-        // Refresh conversation threads
-        const updatedThreads = await chatService.getConversations();
-        if (updatedThreads) setConversationsList(updatedThreads);
+        // Refresh conversation threads safely
+        try {
+          const updatedThreads = await chatService.getConversations();
+          if (updatedThreads) setConversationsList(updatedThreads);
+        } catch (threadErr) {
+          console.warn('[ChatPage] Could not refresh threads:', threadErr);
+        }
       }
 
       const reply = result.replyText || result.answer || result.text;
