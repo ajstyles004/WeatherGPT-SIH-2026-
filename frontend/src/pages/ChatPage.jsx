@@ -193,8 +193,8 @@ const ChatPage = () => {
       const langInfo = getLanguageDetails();
       const result = await chatService.sendMessage({
         message: query,
-        latitude: weatherData?.coordinates?.lat || 19.0760,
-        longitude: weatherData?.coordinates?.lon || 72.8777,
+        latitude: parseFloat(weatherData?.coordinates?.lat) || 19.0760,
+        longitude: parseFloat(weatherData?.coordinates?.lon) || 72.8777,
         language: langInfo.code || 'en',
         conversationId: activeConversationId
       });
