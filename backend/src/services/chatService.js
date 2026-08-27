@@ -55,6 +55,46 @@ class ChatService {
   }
 
   /**
+   * Extract a city name mentioned in the user's message using keyword matching
+   */
+  extractCityFromMessage(message) {
+    const text = message.toLowerCase();
+    // Common Indian cities + prepositions that indicate location
+    const INDIAN_CITIES = [
+      'mumbai','delhi','bangalore','bengaluru','hyderabad','ahmedabad','pune','surat',
+      'jaipur','kolkata','calcutta','lucknow','kanpur','nagpur','indore','bhopal',
+      'visakhapatnam','vizag','prayagraj','allahabad','patna','ludhiana','agra','nashik',
+      'vadodara','meerut','rajkot','varanasi','srinagar','amritsar','aurangabad',
+      'jodhpur','guwahati','chandigarh','coimbatore','kochi','cochin','thiruvananthapuram',
+      'bhubaneswar','ranchi','raipur','shimla','dehradun','jammu','madurai','tiruchirappalli',
+      'mysore','mysuru','hubli','mangalore','vijayawada','gwalior','noida','gurgaon','gurugram',
+      'faridabad','thane','navi mumbai','haridwar','rishikesh','udaipur','ajmer','bikaner',
+      'siliguri','durgapur','asansol','jamshedpur','dhanbad','cuttack','berhampur',
+      'shillong','gangtok','imphal','aizawl','kohima','itanagar','agartala','port blair',
+      'leh','ladakh','panaji','goa','daman','silvassa'
+    ];
+
+    for (const city of INDIAN_CITIES) {
+      // Match: "in mumbai", "for kolkata", "of delhi", "weather kolkata", "mumbai weather"
+      const patterns = [
+        new RegExp(`\\bin\\s+${city}\\b`),
+        new RegExp(`\\bfor\\s+${city}\\b`),
+        new RegExp(`\\bof\\s+${city}\\b`),
+        new RegExp(`\\bat\\s+${city}\\b`),
+        new RegExp(`\\b${city}\\s+(weather|forecast|rain|temperature|temp|climate|alert)\\b`),
+        new RegExp(`\\b(weather|forecast|rain|temperature|temp|climate|alert)\\s+(in\\s+)?${city}\\b`),
+        new RegExp(`^${city}\\b`)
+      ];
+      for (const pattern of patterns) {
+        if (pattern.test(text)) {
+          return city;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
    * Directly query Google Gemini LLM with grounded meteorological telemetry
    */
   async callGemini({ message, weatherData, forecastData, language = 'en', history = [] }) {
@@ -165,14 +205,32 @@ Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluentl
     let locationName = 'Selected Area';
     let risk = 'low';
 
-    const lat = latitude ?? 22.5726; // Default to Kolkata coordinates if unspecified
-    const lon = longitude ?? 88.3639;
+    let lat = latitude ?? 22.5726;
+    let lon = longitude ?? 88.3639;
     let suggestedActions = [];
     let weatherCard = null;
 
     let aiHandled = false;
     let currentData = null;
     let forecastData = null;
+
+    // Detect city name mentioned in the user's message and geocode it
+    try {
+      const cityMatch = this.extractCityFromMessage(message);
+      if (cityMatch) {
+        const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityMatch)}&count=1&country=IN`;
+        const geoRes = await axios.get(geoUrl, { timeout: 5000 });
+        const results = geoRes.data?.results;
+        if (results && results.length > 0) {
+          lat = results[0].latitude;
+          lon = results[0].longitude;
+          locationName = results[0].name + (results[0].admin1 ? `, ${results[0].admin1}` : '');
+          logger.info(`[ChatService] Detected city "${cityMatch}" in message → geocoded to (${lat}, ${lon}) = ${locationName}`);
+        }
+      }
+    } catch (geoErr) {
+      logger.debug('[ChatService] City geocoding notice:', geoErr.message);
+    }
 
     // Fetch live weather data for grounding
     try {
@@ -188,6 +246,7 @@ Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluentl
     } catch (e) {
       logger.debug('[ChatService] Could not pre-fetch forecast:', e.message);
     }
+
 
     // 1. Attempt delegation to external AI/LLM Microservice (Python FastAPI service)
     if (env.AI_SERVICE_URL && env.AI_SERVICE_URL !== 'http://localhost:8000') {
