@@ -65,79 +65,90 @@ class ChatService {
       return null;
     }
 
-    try {
-      const model = env.GEMINI_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const candidateModels = [
+      env.GEMINI_MODEL,
+      'gemini-3.6-flash',
+      'gemini-2.5-flash',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro'
+    ].filter(Boolean);
 
-      logger.info(`[ChatService] Querying Google Gemini API with model: ${model}`);
+    // Deduplicate models
+    const uniqueModels = [...new Set(candidateModels)];
 
-      const langMap = {
-        hi: 'Hindi (हिंदी)',
-        ta: 'Tamil (தமிழ்)',
-        te: 'Telugu (తెలుగు)',
-        bn: 'Bengali (বাংলা)',
-        mr: 'Marathi (मराठी)',
-        gu: 'Gujarati (ગુજરાતી)',
-        pa: 'Punjabi (ਪੰਜਾਬੀ)',
-        en: 'English'
-      };
-      const langName = langMap[language] || 'English';
+    const langMap = {
+      hi: 'Hindi (हिंदी)',
+      ta: 'Tamil (தமிழ்)',
+      te: 'Telugu (తెలుగు)',
+      bn: 'Bengali (বাংলা)',
+      mr: 'Marathi (मराठी)',
+      gu: 'Gujarati (ગુજરાતી)',
+      pa: 'Punjabi (ਪੰਜਾਬੀ)',
+      en: 'English'
+    };
+    const langName = langMap[language] || 'English';
 
-      const systemInstruction = `You are WeatherGPT, an advanced AI meteorological intelligence and advisory assistant for India (SIH 2026).
+    const systemInstruction = `You are WeatherGPT, an advanced AI meteorological intelligence and advisory assistant for India (SIH 2026).
 You provide grounded, highly accurate, natural-language weather insights, agricultural advisories (crop spraying, irrigation, sowing, harvesting), biometeorology (heat index, feels-like), and severe disaster alerts.
 Always ground your answers in the provided real-time meteorological telemetry. Do not fabricate or hallucinate weather observations.
 Structure your answer nicely with clean Markdown formatting, bullet points, and appropriate emojis.
 Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluently in ${langName}.`;
 
-      const contextData = {
-        current_observation: weatherData || null,
-        forecast_outlook: forecastData ? forecastData.forecasts?.slice(0, 3) : null
-      };
+    const contextData = {
+      current_observation: weatherData || null,
+      forecast_outlook: forecastData ? forecastData.forecasts?.slice(0, 3) : null
+    };
 
-      const userContent = `[USER QUERY]: ${message}\n\n[LIVE GROUNDED WEATHER CONTEXT]:\n${JSON.stringify(contextData, null, 2)}`;
+    const userContent = `[USER QUERY]: ${message}\n\n[LIVE GROUNDED WEATHER CONTEXT]:\n${JSON.stringify(contextData, null, 2)}`;
 
-      const contents = [];
-      if (Array.isArray(history) && history.length > 0) {
-        for (const msg of history.slice(-6)) {
-          contents.push({
-            role: msg.role === 'user' ? 'user' : 'model',
-            parts: [{ text: msg.content || '' }]
-          });
-        }
+    const contents = [];
+    if (Array.isArray(history) && history.length > 0) {
+      for (const msg of history.slice(-6)) {
+        contents.push({
+          role: msg.role === 'user' ? 'user' : 'model',
+          parts: [{ text: msg.content || '' }]
+        });
       }
-      contents.push({
-        role: 'user',
-        parts: [{ text: userContent }]
-      });
+    }
+    contents.push({
+      role: 'user',
+      parts: [{ text: userContent }]
+    });
 
-      const payload = {
-        system_instruction: { parts: [{ text: systemInstruction }] },
-        contents,
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 1024
-        }
-      };
-
-      const response = await axios.post(url, payload, {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey
-        },
-        timeout: 15000
-      });
-
-      if (response.data && response.data.candidates && response.data.candidates.length > 0) {
-        const candidate = response.data.candidates[0];
-        const parts = candidate.content?.parts;
-        if (parts && parts.length > 0) {
-          logger.info('[ChatService] Successfully received response from Google Gemini');
-          return parts.map(p => p.text).join('\n');
-        }
+    const payload = {
+      system_instruction: { parts: [{ text: systemInstruction }] },
+      contents,
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 1024
       }
-    } catch (err) {
-      const errDetails = err.response?.data?.error?.message || err.response?.data || err.message;
-      logger.error('[ChatService] Google Gemini API request failed:', JSON.stringify(errDetails));
+    };
+
+    for (const model of uniqueModels) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        logger.info(`[ChatService] Querying Google Gemini API with model: ${model}`);
+
+        const response = await axios.post(url, payload, {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey
+          },
+          timeout: 15000
+        });
+
+        if (response.data && response.data.candidates && response.data.candidates.length > 0) {
+          const candidate = response.data.candidates[0];
+          const parts = candidate.content?.parts;
+          if (parts && parts.length > 0) {
+            logger.info(`[ChatService] Successfully received response from Google Gemini (${model})`);
+            return parts.map(p => p.text).join('\n');
+          }
+        }
+      } catch (err) {
+        const errDetails = err.response?.data?.error?.message || err.response?.data || err.message;
+        logger.warn(`[ChatService] Google Gemini API request failed for model ${model}:`, JSON.stringify(errDetails));
+      }
     }
     return null;
   }
