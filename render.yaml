@@ -35,6 +35,10 @@ services:
           value: http://${HOST}:8001
       - key: CORS_ORIGIN
         value: "*"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
       - key: SEED_DATABASE
         value: "true"
 

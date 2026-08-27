@@ -55,6 +55,83 @@ class ChatService {
   }
 
   /**
+   * Directly query Google Gemini LLM with grounded meteorological telemetry
+   */
+  async callGemini({ message, weatherData, forecastData, language = 'en', history = [] }) {
+    const apiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+
+    try {
+      const model = env.GEMINI_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+      const langMap = {
+        hi: 'Hindi (हिंदी)',
+        ta: 'Tamil (தமிழ்)',
+        te: 'Telugu (తెలుగు)',
+        bn: 'Bengali (বাংলা)',
+        mr: 'Marathi (मराठी)',
+        gu: 'Gujarati (ગુજરાતી)',
+        pa: 'Punjabi (ਪੰਜਾਬੀ)',
+        en: 'English'
+      };
+      const langName = langMap[language] || 'English';
+
+      const systemInstruction = `You are WeatherGPT, an advanced AI meteorological intelligence and advisory assistant for India (SIH 2026).
+You provide grounded, highly accurate, natural-language weather insights, agricultural advisories (crop spraying, irrigation, sowing, harvesting), biometeorology (heat index, feels-like), and severe disaster alerts.
+Always ground your answers in the provided real-time meteorological telemetry. Do not fabricate or hallucinate weather observations.
+Structure your answer nicely with clean Markdown formatting, bullet points, and appropriate emojis.
+Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluently in ${langName}.`;
+
+      const contextData = {
+        current_observation: weatherData || null,
+        forecast_outlook: forecastData ? forecastData.forecasts?.slice(0, 3) : null
+      };
+
+      const userContent = `[USER QUERY]: ${message}\n\n[LIVE GROUNDED WEATHER CONTEXT]:\n${JSON.stringify(contextData, null, 2)}`;
+
+      const contents = [];
+      if (Array.isArray(history) && history.length > 0) {
+        for (const msg of history.slice(-6)) {
+          contents.push({
+            role: msg.role === 'user' ? 'user' : 'model',
+            parts: [{ text: msg.content || '' }]
+          });
+        }
+      }
+      contents.push({
+        role: 'user',
+        parts: [{ text: userContent }]
+      });
+
+      const payload = {
+        system_instruction: { parts: [{ text: systemInstruction }] },
+        contents,
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 1024
+        }
+      };
+
+      const response = await axios.post(url, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 12000
+      });
+
+      if (response.data && response.data.candidates && response.data.candidates.length > 0) {
+        const candidate = response.data.candidates[0];
+        const parts = candidate.content?.parts;
+        if (parts && parts.length > 0) {
+          return parts.map(p => p.text).join('\n');
+        }
+      }
+    } catch (err) {
+      logger.warn('[ChatService] Direct Gemini API call failed:', err.response?.data?.error?.message || err.message);
+    }
+    return null;
+  }
+
+  /**
    * Process a natural language chat query
    */
   async processChat({ message, latitude, longitude, language = 'en', conversationId, userId = null }) {
@@ -70,9 +147,26 @@ class ChatService {
     let weatherCard = null;
 
     let aiHandled = false;
+    let currentData = null;
+    let forecastData = null;
 
-    // 1. Attempt delegation to external AI/LLM Microservice (Python FastAPI / Member 3 service)
-    if (env.AI_SERVICE_URL) {
+    // Fetch live weather data for grounding
+    try {
+      currentData = await weatherService.getCurrentWeather({ lat, lon });
+      risk = this.computeRiskLevel(currentData);
+      locationName = currentData.locationName || locationName;
+    } catch (e) {
+      logger.debug('[ChatService] Could not pre-fetch current weather:', e.message);
+    }
+
+    try {
+      forecastData = await weatherService.getForecast({ lat, lon, days: 3 });
+    } catch (e) {
+      logger.debug('[ChatService] Could not pre-fetch forecast:', e.message);
+    }
+
+    // 1. Attempt delegation to external AI/LLM Microservice (Python FastAPI service)
+    if (env.AI_SERVICE_URL && env.AI_SERVICE_URL !== 'http://localhost:8000') {
       try {
         const aiResponse = await axios.post(`${env.AI_SERVICE_URL}/api/v1/agent/query`, {
           message,
@@ -86,7 +180,7 @@ class ChatService {
           const aiData = aiResponse.data.data || aiResponse.data;
           answer = aiData.answer;
           sources.push(...(aiData.sources || ['AI-Agent-Orchestrator']));
-          risk = aiData.risk || 'low';
+          risk = aiData.risk || risk;
           locationName = aiData.location || locationName;
           suggestedActions = aiData.suggested_actions || aiData.suggestedActions || [];
           weatherCard = aiData.weatherCard || null;
@@ -94,17 +188,50 @@ class ChatService {
           logger.info('[ChatService] Query successfully fulfilled by AI microservice');
         }
       } catch (aiErr) {
-        logger.debug('[ChatService] AI microservice unavailable, falling back to grounded rule engine:', aiErr.message);
+        logger.debug('[ChatService] AI microservice unavailable, attempting direct LLM / rule engine:', aiErr.message);
       }
     }
 
-    // 2. Fallback to built-in grounded meteorological response engine
+    // 2. Direct Google Gemini LLM Generation (when GEMINI_API_KEY is configured in backend)
+    if (!aiHandled && (env.GEMINI_API_KEY || process.env.GEMINI_API_KEY)) {
+      try {
+        const geminiAnswer = await this.callGemini({
+          message,
+          weatherData: currentData,
+          forecastData,
+          language,
+          history: conversationId ? await this.getConversationHistory(conversationId, userId) : []
+        });
+
+        if (geminiAnswer) {
+          answer = geminiAnswer;
+          sources.push('Google-Gemini', currentData?.source || 'open-meteo');
+          aiHandled = true;
+          suggestedActions = [
+            '🌧️ Will it rain tomorrow?',
+            '🌾 Agricultural crop advisory',
+            '⚠️ Active severe weather alerts'
+          ];
+          weatherCard = currentData ? {
+            temperature: currentData.temperature,
+            humidity: currentData.humidity,
+            windSpeed: currentData.windSpeed,
+            rainfall: currentData.rainfall,
+            source: currentData.source || 'open-meteo'
+          } : null;
+          logger.info('[ChatService] Query successfully fulfilled via Google Gemini LLM API');
+        }
+      } catch (geminiErr) {
+        logger.warn('[ChatService] Gemini generation failed, falling back to rule engine:', geminiErr.message);
+      }
+    }
+
+    // 3. Fallback to built-in grounded meteorological response engine
     if (!aiHandled) {
       try {
         if (intent === 'forecast_query') {
-          const forecastData = await weatherService.getForecast({ lat, lon, days: 3 });
-          sources.push(forecastData.source || 'open-meteo');
-          const tomorrow = forecastData.forecasts?.[1] || forecastData.forecasts?.[0];
+          sources.push(forecastData?.source || 'open-meteo');
+          const tomorrow = forecastData?.forecasts?.[1] || forecastData?.forecasts?.[0];
           
           if (tomorrow) {
             const rainProb = tomorrow.rainfallProbability || 0;
@@ -121,10 +248,10 @@ class ChatService {
           risk = 'low';
           answer = `No severe weather warnings or hazardous weather conditions currently active for your coordinates (${lat.toFixed(2)}, ${lon.toFixed(2)}).`;
         } else {
-          const currentData = await weatherService.getCurrentWeather({ lat, lon });
-          sources.push(currentData.source || 'open-meteo');
-          risk = this.computeRiskLevel(currentData);
-          answer = `Current conditions: Temperature is ${currentData.temperature}°C, humidity is ${currentData.humidity}%, with wind speeds at ${currentData.windSpeed} km/h and ${currentData.rainfall}mm rainfall.`;
+          const liveCurrent = currentData || await weatherService.getCurrentWeather({ lat, lon });
+          sources.push(liveCurrent.source || 'open-meteo');
+          risk = this.computeRiskLevel(liveCurrent);
+          answer = `Current conditions: Temperature is ${liveCurrent.temperature}°C, humidity is ${liveCurrent.humidity}%, with wind speeds at ${liveCurrent.windSpeed} km/h and ${liveCurrent.rainfall}mm rainfall.`;
         }
       } catch (err) {
         logger.error('Weather retrieval failed in chatService:', err.message);

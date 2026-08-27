@@ -12,6 +12,8 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('7d'),
   WEATHER_PROVIDER: z.enum(['open-meteo', 'openweather', 'imd']).default('open-meteo'),
   OPENWEATHER_API_KEY: z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-2.0-flash'),
   AI_SERVICE_URL: z.string().default('http://localhost:8000'),
   GIS_SERVICE_URL: z.string().default('http://localhost:8001'),
   CORS_ORIGIN: z.string().default('http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://localhost:80')
