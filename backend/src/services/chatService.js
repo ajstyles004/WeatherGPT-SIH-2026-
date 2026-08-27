@@ -65,12 +65,12 @@ class ChatService {
       return null;
     }
 
+    // Models confirmed available with v1beta - ordered by preference
+    // gemini-1.5-x models are NOT available on v1beta, skip them entirely
     const candidateModels = [
-      env.GEMINI_MODEL,
+      env.GEMINI_MODEL || 'gemini-3.6-flash',
       'gemini-3.6-flash',
-      'gemini-2.5-flash',
-      'gemini-1.5-flash',
-      'gemini-1.5-pro'
+      'gemini-flash-latest'
     ].filter(Boolean);
 
     // Deduplicate models
@@ -126,15 +126,17 @@ Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluentl
 
     for (const model of uniqueModels) {
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        logger.info(`[ChatService] Querying Google Gemini API with model: ${model}`);
+        // Use v1 for gemini-1.x models, v1beta for 2.x/3.x
+        const apiVersion = model.startsWith('gemini-1.') ? 'v1' : 'v1beta';
+        const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
+        logger.info(`[ChatService] Querying Google Gemini API with model: ${model} (${apiVersion})`);
 
         const response = await axios.post(url, payload, {
           headers: {
             'Content-Type': 'application/json',
             'x-goog-api-key': apiKey
           },
-          timeout: 15000
+          timeout: 25000
         });
 
         if (response.data && response.data.candidates && response.data.candidates.length > 0) {
