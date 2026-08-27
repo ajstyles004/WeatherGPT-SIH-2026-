@@ -3,6 +3,8 @@ import { INDIAN_CITIES } from '../config/constants';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
+console.log('[WeatherGPT API] Base URL:', API_BASE_URL);
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -202,6 +204,7 @@ export const authService = {
       const response = await apiClient.get('/auth/me');
       return response.data.data?.user || response.data.data;
     } catch (err) {
+      console.error('[Auth GetMe Error]:', err);
       return null;
     }
   },
@@ -215,7 +218,7 @@ export const authService = {
     try {
       await apiClient.post('/auth/logout');
     } catch (err) {
-      // Ignore network errors on logout
+      console.error('[Auth Logout Error]:', err);
     } finally {
       localStorage.removeItem('weathergpt_token');
     }

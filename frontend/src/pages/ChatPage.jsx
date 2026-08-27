@@ -229,12 +229,14 @@ const ChatPage = () => {
         speakText(reply);
       }
     } catch (err) {
+      const errMsg = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Network error';
+      console.error('[ChatPage] sendMessage failed:', err?.response?.status, errMsg, err);
       setMessages(prev => [
         ...prev,
         {
           id: `ai-err-${Date.now()}`,
           sender: 'ai',
-          text: 'I encountered an issue querying the numerical weather prediction models. Please verify your connection or try again.',
+          text: `Error: ${errMsg}`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
