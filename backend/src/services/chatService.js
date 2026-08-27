@@ -58,12 +58,18 @@ class ChatService {
    * Directly query Google Gemini LLM with grounded meteorological telemetry
    */
   async callGemini({ message, weatherData, forecastData, language = 'en', history = [] }) {
-    const apiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-    if (!apiKey) return null;
+    const rawKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
+    const apiKey = rawKey.replace(/\s+/g, '').trim();
+    if (!apiKey) {
+      logger.debug('[ChatService] No GEMINI_API_KEY found, skipping Gemini call');
+      return null;
+    }
 
     try {
       const model = env.GEMINI_MODEL || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+      logger.info(`[ChatService] Querying Google Gemini API with model: ${model}`);
 
       const langMap = {
         hi: 'Hindi (हिंदी)',
@@ -115,18 +121,20 @@ Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluentl
 
       const response = await axios.post(url, payload, {
         headers: { 'Content-Type': 'application/json' },
-        timeout: 12000
+        timeout: 15000
       });
 
       if (response.data && response.data.candidates && response.data.candidates.length > 0) {
         const candidate = response.data.candidates[0];
         const parts = candidate.content?.parts;
         if (parts && parts.length > 0) {
+          logger.info('[ChatService] Successfully received response from Google Gemini');
           return parts.map(p => p.text).join('\n');
         }
       }
     } catch (err) {
-      logger.warn('[ChatService] Direct Gemini API call failed:', err.response?.data?.error?.message || err.message);
+      const errDetails = err.response?.data?.error?.message || err.response?.data || err.message;
+      logger.error('[ChatService] Google Gemini API request failed:', JSON.stringify(errDetails));
     }
     return null;
   }
