@@ -15,16 +15,26 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Parse and configure CORS Origin Whitelist
-const allowedOrigins = (env.CORS_ORIGIN || '*')
+const corsOriginEnv = env.CORS_ORIGIN || '';
+const allowedOrigins = corsOriginEnv
   .split(',')
   .map(o => o.trim())
   .filter(Boolean);
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
-    // Allow non-browser requests (e.g. mobile apps, curl, Postman, server-to-server)
+    // Allow non-browser requests (curl, Postman, mobile, server-to-server)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+    // If CORS_ORIGIN is set to '*' or not configured, allow all
+    if (!corsOriginEnv || allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+    // Allow if origin matches whitelist exactly or is a Vercel/Render deployment subdomain
+    const isAllowed = allowedOrigins.includes(origin) ||
+      origin.endsWith('.vercel.app') ||
+      origin.endsWith('.onrender.com') ||
+      origin.endsWith('.railway.app');
+    if (isAllowed) {
       return callback(null, true);
     }
     return callback(new Error(`CORS Error: Origin '${origin}' is not allowed by policy.`), false);
@@ -32,7 +42,8 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
