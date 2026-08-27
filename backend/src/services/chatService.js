@@ -120,7 +120,10 @@ Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluentl
       };
 
       const response = await axios.post(url, payload, {
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey
+        },
         timeout: 15000
       });
 

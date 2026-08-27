@@ -92,8 +92,13 @@ class LLMClient:
             }
         }
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=payload)
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": (self.gemini_key or "").strip()
+        }
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
             if resp.status_code == 200:
                 data = resp.json()
                 candidates = data.get("candidates", [])
