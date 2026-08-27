@@ -128,18 +128,34 @@ class ChatService {
     };
     const langName = langMap[language] || 'English';
 
-    const systemInstruction = `You are WeatherGPT, an advanced AI meteorological intelligence and advisory assistant for India (SIH 2026).
-You provide grounded, highly accurate, natural-language weather insights, agricultural advisories (crop spraying, irrigation, sowing, harvesting), biometeorology (heat index, feels-like), and severe disaster alerts.
-Always ground your answers in the provided real-time meteorological telemetry. Do not fabricate or hallucinate weather observations.
-Structure your answer nicely with clean Markdown formatting, bullet points, and appropriate emojis.
-Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluently in ${langName}.`;
+    const systemInstruction = `You are WeatherGPT AI, an advanced conversational meteorological intelligence assistant built for India's Smart India Hackathon 2026 (SIH 2026), developed by the Ministry of Earth Sciences / IMD.
+
+You are a FULL conversational AI assistant. You can:
+- Answer weather, climate, and meteorology questions in rich detail
+- Provide agricultural advisories (crop spraying windows, irrigation schedules, sowing/harvesting decisions)
+- Analyze biometeorology (heat index, feels-like temperature, humidity stress)
+- Issue disaster preparedness guidance (cyclones, floods, heatwaves, fog)
+- Explain scientific concepts (monsoon dynamics, El Niño, La Niña, ITCZ, Western Disturbances)
+- Answer general greetings and casual conversation naturally
+- Help users understand the weather interface and features
+
+RESPONSE RULES:
+1. If the user greets you ("hi", "hello", "who are you"), introduce yourself warmly and mention your capabilities.
+2. Always use the provided LIVE WEATHER CONTEXT if it is relevant to the question. Do not make up weather numbers.
+3. If the user asks about a DIFFERENT city than the context coordinates, acknowledge it and provide best available information.
+4. Format responses with clean Markdown: use **bold**, bullet points (•), headers (###), tables, and relevant emojis (🌡️ 🌧️ 💨 🌤️ ⚡ 🌪️ 🌾 ⚠️).
+5. Keep responses concise but complete. Use tables for numerical comparisons.
+6. Always cite data sources at the end (e.g., IMD, Open-Meteo, ECMWF, ICAR, NCMRWF).
+7. Respond fluently in ${langName}.
+8. For non-weather questions, answer helpfully but gently redirect to your meteorological expertise.`;
 
     const contextData = {
       current_observation: weatherData || null,
-      forecast_outlook: forecastData ? forecastData.forecasts?.slice(0, 3) : null
+      forecast_outlook: forecastData ? forecastData.forecasts?.slice(0, 5) : null
     };
 
-    const userContent = `[USER QUERY]: ${message}\n\n[LIVE GROUNDED WEATHER CONTEXT]:\n${JSON.stringify(contextData, null, 2)}`;
+    const userContent = `[USER QUERY]: ${message}\n\n[LIVE GROUNDED WEATHER TELEMETRY (use this to ground your answer)]:\n${JSON.stringify(contextData, null, 2)}`;
+
 
     const contents = [];
     if (Array.isArray(history) && history.length > 0) {
@@ -176,7 +192,7 @@ Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluentl
             'Content-Type': 'application/json',
             'x-goog-api-key': apiKey
           },
-          timeout: 25000
+          timeout: 30000
         });
 
         if (response.data && response.data.candidates && response.data.candidates.length > 0) {
@@ -214,39 +230,51 @@ Cite official data sources (e.g., IMD, Open-Meteo, ECMWF, ICAR). Respond fluentl
     let currentData = null;
     let forecastData = null;
 
-    // Detect city name mentioned in the user's message and geocode it
-    try {
-      const cityMatch = this.extractCityFromMessage(message);
-      if (cityMatch) {
+    // Geocode city + fetch current + forecast all in parallel to reduce latency
+    const [geoResult, currentResult, forecastResult] = await Promise.allSettled([
+      // City geocoding from message text
+      (async () => {
+        const cityMatch = this.extractCityFromMessage(message);
+        if (!cityMatch) return null;
         const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityMatch)}&count=1&country=IN`;
-        const geoRes = await axios.get(geoUrl, { timeout: 5000 });
+        const geoRes = await axios.get(geoUrl, { timeout: 4000 });
         const results = geoRes.data?.results;
         if (results && results.length > 0) {
-          lat = results[0].latitude;
-          lon = results[0].longitude;
-          locationName = results[0].name + (results[0].admin1 ? `, ${results[0].admin1}` : '');
-          logger.info(`[ChatService] Detected city "${cityMatch}" in message → geocoded to (${lat}, ${lon}) = ${locationName}`);
+          return { lat: results[0].latitude, lon: results[0].longitude, name: results[0].name + (results[0].admin1 ? `, ${results[0].admin1}` : '') };
         }
+        return null;
+      })(),
+      weatherService.getCurrentWeather({ lat, lon }),
+      weatherService.getForecast({ lat, lon, days: 3 })
+    ]);
+
+    // Apply geocoded city coordinates if a city was detected
+    if (geoResult.status === 'fulfilled' && geoResult.value) {
+      const geo = geoResult.value;
+      lat = geo.lat;
+      lon = geo.lon;
+      locationName = geo.name;
+      logger.info(`[ChatService] City detected in message → geocoded to (${lat}, ${lon}) = ${locationName}`);
+      // Re-fetch weather for the detected city (quick since cache may already have it)
+      try {
+        const [newCurrent, newForecast] = await Promise.all([
+          weatherService.getCurrentWeather({ lat, lon }),
+          weatherService.getForecast({ lat, lon, days: 3 })
+        ]);
+        currentData = newCurrent;
+        forecastData = newForecast;
+      } catch (e) {
+        logger.debug('[ChatService] Could not fetch weather for detected city:', e.message);
       }
-    } catch (geoErr) {
-      logger.debug('[ChatService] City geocoding notice:', geoErr.message);
+    } else {
+      if (currentResult.status === 'fulfilled') currentData = currentResult.value;
+      if (forecastResult.status === 'fulfilled') forecastData = forecastResult.value;
     }
 
-    // Fetch live weather data for grounding
-    try {
-      currentData = await weatherService.getCurrentWeather({ lat, lon });
+    if (currentData) {
       risk = this.computeRiskLevel(currentData);
       locationName = currentData.locationName || locationName;
-    } catch (e) {
-      logger.debug('[ChatService] Could not pre-fetch current weather:', e.message);
     }
-
-    try {
-      forecastData = await weatherService.getForecast({ lat, lon, days: 3 });
-    } catch (e) {
-      logger.debug('[ChatService] Could not pre-fetch forecast:', e.message);
-    }
-
 
     // 1. Attempt delegation to external AI/LLM Microservice (Python FastAPI service)
     if (env.AI_SERVICE_URL && env.AI_SERVICE_URL !== 'http://localhost:8000') {
